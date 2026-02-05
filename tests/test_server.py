@@ -307,6 +307,795 @@ class TestMCPTools:
         assert result.result == []
 
 
+class TestCRUDTools:
+    """Tests for CRUD operation tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_create_record_success(self, mock_context):
+        """Test create_record tool with successful creation"""
+        from odoo_mcp.server import create_record
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 42
+
+        result = create_record(
+            mock_context,
+            model="res.partner",
+            values={"name": "Test Partner", "email": "test@example.com"},
+        )
+
+        assert result["success"] is True
+        assert result["id"] == 42
+        assert result["model"] == "res.partner"
+
+    def test_create_record_failure(self, mock_context):
+        """Test create_record tool with failure"""
+        from odoo_mcp.server import create_record
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = Exception(
+            "Validation error"
+        )
+
+        result = create_record(
+            mock_context,
+            model="res.partner",
+            values={"name": ""},
+        )
+
+        assert result["success"] is False
+        assert "Validation error" in result["error"]
+
+    def test_update_record_success(self, mock_context):
+        """Test update_record tool with successful update"""
+        from odoo_mcp.server import update_record
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = update_record(
+            mock_context,
+            model="res.partner",
+            ids=[1, 2],
+            values={"phone": "123456789"},
+        )
+
+        assert result["success"] is True
+        assert result["updated_ids"] == [1, 2]
+
+    def test_delete_record_success(self, mock_context):
+        """Test delete_record tool with successful deletion"""
+        from odoo_mcp.server import delete_record
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = delete_record(
+            mock_context,
+            model="res.partner",
+            ids=[5, 6],
+        )
+
+        assert result["success"] is True
+        assert result["deleted_ids"] == [5, 6]
+
+
+class TestSearchTools:
+    """Tests for search operation tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_search_records_success(self, mock_context, sample_partner_records):
+        """Test search_records tool with successful search"""
+        from odoo_mcp.server import search_records
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            100,  # search_count
+            sample_partner_records,  # search_read
+        ]
+
+        result = search_records(
+            mock_context,
+            model="res.partner",
+            domain=[["is_company", "=", True]],
+            limit=10,
+        )
+
+        assert result["success"] is True
+        assert len(result["records"]) == 3
+        assert result["count"] == 100
+        assert result["has_more"] is True
+
+    def test_search_records_pagination(self, mock_context):
+        """Test search_records with pagination"""
+        from odoo_mcp.server import search_records
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            50,  # search_count
+            [{"id": 21, "name": "Record 21"}],  # search_read
+        ]
+
+        result = search_records(
+            mock_context,
+            model="res.partner",
+            domain=[],
+            offset=20,
+            limit=10,
+        )
+
+        assert result["success"] is True
+        assert result["offset"] == 20
+        assert result["limit"] == 10
+
+    def test_count_records_success(self, mock_context):
+        """Test count_records tool"""
+        from odoo_mcp.server import count_records
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 42
+
+        result = count_records(
+            mock_context,
+            model="res.partner",
+            domain=[["is_company", "=", True]],
+        )
+
+        assert result["success"] is True
+        assert result["count"] == 42
+
+    def test_read_records_tool_success(self, mock_context, sample_partner_records):
+        """Test read_records tool"""
+        from odoo_mcp.server import read_records as read_records_tool
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = sample_partner_records
+
+        result = read_records_tool(
+            mock_context,
+            model="res.partner",
+            ids=[1, 2, 3],
+            fields=["name", "email"],
+        )
+
+        assert result["success"] is True
+        assert len(result["records"]) == 3
+
+
+class TestIntrospectionTools:
+    """Tests for model introspection tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_get_fields_success(self, mock_context, sample_fields_data):
+        """Test get_fields tool"""
+        from odoo_mcp.server import get_fields
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = sample_fields_data
+
+        result = get_fields(
+            mock_context,
+            model="res.partner",
+        )
+
+        assert result["success"] is True
+        assert "fields" in result
+        assert "name" in result["required_fields"]
+        assert "partner_id" in result["relational_fields"]
+
+    def test_get_default_values_success(self, mock_context):
+        """Test get_default_values tool"""
+        from odoo_mcp.server import get_default_values
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = {
+            "active": True,
+            "is_company": False,
+        }
+
+        result = get_default_values(
+            mock_context,
+            model="res.partner",
+        )
+
+        assert result["success"] is True
+        assert result["defaults"]["active"] is True
+
+
+class TestWorkflowTools:
+    """Tests for workflow action tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_execute_action_success(self, mock_context):
+        """Test execute_action tool"""
+        from odoo_mcp.server import execute_action
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = execute_action(
+            mock_context,
+            model="sale.order",
+            ids=[1],
+            action="action_confirm",
+        )
+
+        assert result["success"] is True
+        assert result["action"] == "action_confirm"
+        assert result["ids"] == [1]
+
+
+class TestAttachmentTools:
+    """Tests for attachment tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_list_attachments_success(self, mock_context):
+        """Test list_attachments tool"""
+        from odoo_mcp.server import list_attachments
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = [
+            {"id": 1, "name": "document.pdf", "mimetype": "application/pdf"},
+            {"id": 2, "name": "image.png", "mimetype": "image/png"},
+        ]
+
+        result = list_attachments(
+            mock_context,
+            model="res.partner",
+            res_id=1,
+        )
+
+        assert result["success"] is True
+        assert len(result["attachments"]) == 2
+        assert result["count"] == 2
+
+    def test_create_attachment_success(self, mock_context):
+        """Test create_attachment tool"""
+        from odoo_mcp.server import create_attachment
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 10
+
+        result = create_attachment(
+            mock_context,
+            name="test.pdf",
+            model="res.partner",
+            res_id=1,
+            data="SGVsbG8gV29ybGQ=",  # base64 "Hello World"
+            mimetype="application/pdf",
+        )
+
+        assert result["success"] is True
+        assert result["attachment_id"] == 10
+
+
+class TestCommonModelTools:
+    """Tests for common model search tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_search_partners_success(self, mock_context, sample_partner_records):
+        """Test search_partners tool"""
+        from odoo_mcp.server import search_partners
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            3,  # search_count
+            sample_partner_records,  # search_read
+        ]
+
+        result = search_partners(
+            mock_context,
+            name="Test",
+            is_company=True,
+        )
+
+        assert result["success"] is True
+        assert len(result["partners"]) == 3
+        assert result["count"] == 3
+
+    def test_search_products_success(self, mock_context):
+        """Test search_products tool"""
+        from odoo_mcp.server import search_products
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            2,  # search_count
+            [
+                {"id": 1, "name": "Laptop", "list_price": 999.99},
+                {"id": 2, "name": "Mouse", "list_price": 29.99},
+            ],
+        ]
+
+        result = search_products(
+            mock_context,
+            name="Laptop",
+            sale_ok=True,
+        )
+
+        assert result["success"] is True
+        assert len(result["products"]) == 2
+
+    def test_search_sale_orders_success(self, mock_context):
+        """Test search_sale_orders tool"""
+        from odoo_mcp.server import search_sale_orders
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            1,  # search_count
+            [{"id": 1, "name": "SO001", "state": "sale", "amount_total": 1500.00}],
+        ]
+
+        result = search_sale_orders(
+            mock_context,
+            state="sale",
+        )
+
+        assert result["success"] is True
+        assert len(result["orders"]) == 1
+        assert result["orders"][0]["name"] == "SO001"
+
+    def test_search_invoices_success(self, mock_context):
+        """Test search_invoices tool"""
+        from odoo_mcp.server import search_invoices
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            1,  # search_count
+            [{"id": 1, "name": "INV/2024/0001", "state": "posted", "amount_total": 1000.00}],
+        ]
+
+        result = search_invoices(
+            mock_context,
+            state="posted",
+            move_type="out_invoice",
+        )
+
+        assert result["success"] is True
+        assert len(result["invoices"]) == 1
+
+
+class TestMessagingTools:
+    """Tests for messaging/chatter tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_post_comment_success(self, mock_context):
+        """Test post_comment tool"""
+        from odoo_mcp.server import post_comment
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 123
+
+        result = post_comment(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+            body="<p>Test comment</p>",
+        )
+
+        assert result["success"] is True
+        assert result["message_id"] == 123
+
+    def test_post_internal_note_success(self, mock_context):
+        """Test post_internal_note tool"""
+        from odoo_mcp.server import post_internal_note
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 124
+
+        result = post_internal_note(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+            body="<p>Internal note</p>",
+        )
+
+        assert result["success"] is True
+        assert result["message_id"] == 124
+
+    def test_send_email_success(self, mock_context):
+        """Test send_email tool"""
+        from odoo_mcp.server import send_email
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 125
+
+        result = send_email(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+            subject="Order Confirmation",
+            body="<p>Your order has been confirmed.</p>",
+            partner_ids=[5],
+        )
+
+        assert result["success"] is True
+        assert result["message_id"] == 125
+
+    def test_get_messages_success(self, mock_context):
+        """Test get_messages tool with new pagination"""
+        from odoo_mcp.server import get_messages
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            10,  # search_count
+            [
+                {"id": 1, "body": "Message 1", "date": "2024-01-15 10:00:00"},
+                {"id": 2, "body": "Message 2", "date": "2024-01-14 09:00:00"},
+            ],
+        ]
+
+        result = get_messages(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+        )
+
+        assert result["success"] is True
+        assert len(result["messages"]) == 2
+        assert result["count"] == 10
+
+    def test_post_message_legacy_success(self, mock_context):
+        """Test legacy post_message tool"""
+        from odoo_mcp.server import post_message
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = 123
+
+        result = post_message(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+            body="<p>Test message</p>",
+        )
+
+        assert result["success"] is True
+        assert result["message_id"] == 123
+
+
+class TestFollowerTools:
+    """Tests for follower management tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_get_followers_success(self, mock_context):
+        """Test get_followers tool"""
+        from odoo_mcp.server import get_followers
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            [{"id": 1, "partner_id": [5, "John Doe"], "subtype_ids": [1, 2]}],
+            [{"id": 5, "name": "John Doe", "email": "john@example.com", "is_company": False}],
+        ]
+
+        result = get_followers(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+        )
+
+        assert result["success"] is True
+        assert result["count"] == 1
+
+    def test_add_followers_success(self, mock_context):
+        """Test add_followers tool"""
+        from odoo_mcp.server import add_followers
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = add_followers(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+            partner_ids=[5, 6],
+        )
+
+        assert result["success"] is True
+        assert result["added_partners"] == [5, 6]
+
+    def test_remove_followers_success(self, mock_context):
+        """Test remove_followers tool"""
+        from odoo_mcp.server import remove_followers
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = remove_followers(
+            mock_context,
+            model="sale.order",
+            res_id=1,
+            partner_ids=[5],
+        )
+
+        assert result["success"] is True
+        assert result["removed_partners"] == [5]
+
+
+class TestActivityTools:
+    """Tests for activity management tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_create_activity_success(self, mock_context):
+        """Test create_activity tool"""
+        from odoo_mcp.server import create_activity
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            1,  # xmlid_to_res_id
+            10,  # create
+        ]
+
+        result = create_activity(
+            mock_context,
+            model="res.partner",
+            res_id=1,
+            activity_type="mail.mail_activity_data_call",
+            summary="Follow up call",
+            date_deadline="2024-01-20",
+        )
+
+        assert result["success"] is True
+        assert result["activity_id"] == 10
+
+    def test_create_activity_invalid_date(self, mock_context):
+        """Test create_activity with invalid date"""
+        from odoo_mcp.server import create_activity
+
+        result = create_activity(
+            mock_context,
+            model="res.partner",
+            res_id=1,
+            activity_type="mail.mail_activity_data_call",
+            summary="Follow up call",
+            date_deadline="invalid-date",
+        )
+
+        assert result["success"] is False
+        assert "Invalid date_deadline format" in result["error"]
+
+    def test_get_activities_success(self, mock_context):
+        """Test get_activities tool"""
+        from odoo_mcp.server import get_activities
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            5,  # search_count
+            [
+                {"id": 1, "summary": "Call customer", "date_deadline": "2024-01-20"},
+                {"id": 2, "summary": "Send proposal", "date_deadline": "2024-01-21"},
+            ],
+        ]
+
+        result = get_activities(
+            mock_context,
+            model="res.partner",
+            res_id=1,
+        )
+
+        assert result["success"] is True
+        assert result["count"] == 5
+        assert len(result["activities"]) == 2
+
+    def test_complete_activity_success(self, mock_context):
+        """Test complete_activity tool"""
+        from odoo_mcp.server import complete_activity
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = complete_activity(
+            mock_context,
+            activity_id=1,
+            feedback="Completed the call",
+        )
+
+        assert result["success"] is True
+        assert result["completed_activity_id"] == 1
+
+    def test_cancel_activity_success(self, mock_context):
+        """Test cancel_activity tool"""
+        from odoo_mcp.server import cancel_activity
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = cancel_activity(
+            mock_context,
+            activity_id=1,
+        )
+
+        assert result["success"] is True
+        assert result["cancelled_activity_id"] == 1
+
+    def test_reschedule_activity_success(self, mock_context):
+        """Test reschedule_activity tool"""
+        from odoo_mcp.server import reschedule_activity
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = reschedule_activity(
+            mock_context,
+            activity_id=1,
+            new_date="2024-02-01",
+        )
+
+        assert result["success"] is True
+        assert result["new_date"] == "2024-02-01"
+
+    def test_get_activity_types_success(self, mock_context):
+        """Test get_activity_types tool"""
+        from odoo_mcp.server import get_activity_types
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = [
+            {"id": 1, "name": "Email", "icon": "fa-envelope"},
+            {"id": 2, "name": "Call", "icon": "fa-phone"},
+            {"id": 3, "name": "Meeting", "icon": "fa-users"},
+        ]
+
+        result = get_activity_types(mock_context)
+
+        assert result["success"] is True
+        assert len(result["activity_types"]) == 3
+
+
+class TestDelegationTools:
+    """Tests for delegation and assignment tools"""
+
+    @pytest.fixture
+    def mock_context(self, mock_odoo_client):
+        """Create a mock MCP context with Odoo client"""
+        ctx = Mock()
+        ctx.request_context = Mock()
+        ctx.request_context.lifespan_context = Mock()
+        ctx.request_context.lifespan_context.odoo = mock_odoo_client
+        return ctx
+
+    def test_delegate_activity_success(self, mock_context):
+        """Test delegate_activity tool"""
+        from odoo_mcp.server import delegate_activity
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = True
+
+        result = delegate_activity(
+            mock_context,
+            activity_id=1,
+            user_id=5,
+        )
+
+        assert result["success"] is True
+        assert result["delegated_to"] == 5
+
+    def test_assign_record_success(self, mock_context):
+        """Test assign_record tool"""
+        from odoo_mcp.server import assign_record
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            {"user_id": {"type": "many2one"}},  # fields_get
+            True,  # write
+            [{"id": 5, "name": "John Doe", "partner_id": [10, "John Doe"]}],  # read user
+            123,  # message_post
+        ]
+
+        result = assign_record(
+            mock_context,
+            model="crm.lead",
+            res_id=1,
+            user_id=5,
+        )
+
+        assert result["success"] is True
+        assert result["assigned_to"] == 5
+
+    def test_toggle_message_star_success(self, mock_context):
+        """Test toggle_message_star tool"""
+        from odoo_mcp.server import toggle_message_star
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            [{"id": 1, "starred": False}],  # read
+            True,  # set_starred
+        ]
+
+        result = toggle_message_star(
+            mock_context,
+            message_id=1,
+        )
+
+        assert result["success"] is True
+        assert result["starred"] is True
+
+    def test_get_starred_messages_success(self, mock_context):
+        """Test get_starred_messages tool"""
+        from odoo_mcp.server import get_starred_messages
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            3,  # search_count
+            [
+                {"id": 1, "body": "Starred 1", "starred": True},
+                {"id": 2, "body": "Starred 2", "starred": True},
+            ],
+        ]
+
+        result = get_starred_messages(mock_context)
+
+        assert result["success"] is True
+        assert result["count"] == 3
+
+    def test_get_assignable_users_success(self, mock_context):
+        """Test get_assignable_users tool"""
+        from odoo_mcp.server import get_assignable_users
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.return_value = [
+            {"id": 1, "name": "Admin", "login": "admin"},
+            {"id": 2, "name": "User", "login": "user"},
+        ]
+
+        result = get_assignable_users(mock_context)
+
+        assert result["success"] is True
+        assert len(result["users"]) == 2
+
+    def test_bulk_delegate_activities_success(self, mock_context):
+        """Test bulk_delegate_activities tool"""
+        from odoo_mcp.server import bulk_delegate_activities
+
+        mock_context.request_context.lifespan_context.odoo._models.execute_kw.side_effect = [
+            True,  # write
+            [{"id": 5, "name": "John Doe"}],  # read user
+        ]
+
+        result = bulk_delegate_activities(
+            mock_context,
+            activity_ids=[1, 2, 3],
+            user_id=5,
+        )
+
+        assert result["success"] is True
+        assert result["delegated_count"] == 3
+        assert result["delegated_to"] == 5
+
+
 class TestPydanticModels:
     """Tests for Pydantic model definitions"""
 
