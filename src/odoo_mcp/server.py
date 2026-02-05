@@ -1125,7 +1125,1038 @@ def get_company_info(
 # ----- MCP Tools: Messaging/Chatter -----
 
 
-@mcp.tool(description="Post a message on a record's chatter")
+@mcp.tool(description="Post a public comment on a record (visible to customers)")
+def post_comment(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    body: str,
+    partner_ids: List[int] = None,
+    attachment_ids: List[int] = None,
+) -> Dict[str, Any]:
+    """
+    Post a public comment on a record's chatter.
+    Comments are visible to followers including external partners/customers.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order', 'helpdesk.ticket')
+        res_id: The record ID
+        body: HTML content of the message (supports basic HTML tags)
+        partner_ids: List of partner IDs to notify (optional)
+        attachment_ids: List of attachment IDs to include (optional)
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - message_id: ID of the created message
+        - error: Error message (if failure)
+
+    Example:
+        post_comment("sale.order", 1, "<p>Your order has been shipped!</p>", partner_ids=[5])
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        kwargs = {
+            "body": body,
+            "message_type": "comment",
+            "subtype_xmlid": "mail.mt_comment",
+        }
+        if partner_ids:
+            kwargs["partner_ids"] = partner_ids
+        if attachment_ids:
+            kwargs["attachment_ids"] = attachment_ids
+
+        message_id = odoo.execute_method(model, "message_post", [res_id], **kwargs)
+        return {"success": True, "message_id": message_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Post an internal note on a record (not visible to customers)")
+def post_internal_note(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    body: str,
+    partner_ids: List[int] = None,
+    attachment_ids: List[int] = None,
+) -> Dict[str, Any]:
+    """
+    Post an internal note on a record's chatter.
+    Internal notes are only visible to internal users, NOT to external partners/customers.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order', 'res.partner')
+        res_id: The record ID
+        body: HTML content of the note
+        partner_ids: List of internal user partner IDs to notify (optional)
+        attachment_ids: List of attachment IDs to include (optional)
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - message_id: ID of the created message
+        - error: Error message (if failure)
+
+    Example:
+        post_internal_note("sale.order", 1, "<p>Customer requested urgent delivery</p>")
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        kwargs = {
+            "body": body,
+            "message_type": "comment",
+            "subtype_xmlid": "mail.mt_note",  # Internal note subtype
+        }
+        if partner_ids:
+            kwargs["partner_ids"] = partner_ids
+        if attachment_ids:
+            kwargs["attachment_ids"] = attachment_ids
+
+        message_id = odoo.execute_method(model, "message_post", [res_id], **kwargs)
+        return {"success": True, "message_id": message_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Send an email from a record")
+def send_email(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    subject: str,
+    body: str,
+    partner_ids: List[int],
+    attachment_ids: List[int] = None,
+    email_from: str = None,
+) -> Dict[str, Any]:
+    """
+    Send an email from a record's chatter.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order')
+        res_id: The record ID
+        subject: Email subject
+        body: HTML content of the email
+        partner_ids: List of partner IDs to send the email to
+        attachment_ids: List of attachment IDs to include (optional)
+        email_from: Sender email address (optional, uses default if not provided)
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - message_id: ID of the created message
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        kwargs = {
+            "body": body,
+            "subject": subject,
+            "message_type": "email",
+            "subtype_xmlid": "mail.mt_comment",
+            "partner_ids": partner_ids,
+        }
+        if attachment_ids:
+            kwargs["attachment_ids"] = attachment_ids
+        if email_from:
+            kwargs["email_from"] = email_from
+
+        message_id = odoo.execute_method(model, "message_post", [res_id], **kwargs)
+        return {"success": True, "message_id": message_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Get messages/chatter history for a record with filters")
+def get_messages(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    message_type: str = None,
+    include_internal: bool = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """
+    Get the message history (chatter) for a record with filtering options.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order')
+        res_id: The record ID
+        message_type: Filter by message type ('comment', 'email', 'notification', None for all)
+        include_internal: Whether to include internal notes (default True)
+        limit: Maximum number of messages to return
+        offset: Number of messages to skip (for pagination)
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - messages: List of messages with details
+        - count: Total number of messages
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        domain = [["model", "=", model], ["res_id", "=", res_id]]
+
+        if message_type:
+            domain.append(["message_type", "=", message_type])
+
+        if not include_internal:
+            # Exclude internal notes by filtering out mail.mt_note subtype
+            domain.append(["subtype_id.internal", "=", False])
+
+        count = odoo.execute_method("mail.message", "search_count", domain)
+
+        messages = odoo.search_read(
+            "mail.message",
+            domain,
+            fields=[
+                "id",
+                "date",
+                "author_id",
+                "body",
+                "message_type",
+                "subtype_id",
+                "subject",
+                "partner_ids",
+                "attachment_ids",
+                "email_from",
+                "starred",
+            ],
+            limit=limit,
+            offset=offset,
+            order="date desc",
+        )
+        return {
+            "success": True,
+            "messages": messages,
+            "count": count,
+            "has_more": (offset + len(messages)) < count,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ----- MCP Tools: Followers -----
+
+
+@mcp.tool(description="Get followers of a record")
+def get_followers(
+    ctx: Context,
+    model: str,
+    res_id: int,
+) -> Dict[str, Any]:
+    """
+    Get all followers of a record.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order')
+        res_id: The record ID
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - followers: List of followers with partner details
+        - count: Number of followers
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        followers = odoo.search_read(
+            "mail.followers",
+            [["res_model", "=", model], ["res_id", "=", res_id]],
+            fields=["id", "partner_id", "subtype_ids"],
+        )
+
+        # Get partner details for each follower
+        partner_ids = [f["partner_id"][0] for f in followers if f.get("partner_id")]
+        partners = {}
+        if partner_ids:
+            partner_records = odoo.read_records(
+                "res.partner",
+                partner_ids,
+                fields=["id", "name", "email", "is_company"],
+            )
+            partners = {p["id"]: p for p in partner_records}
+
+        # Enrich followers with partner details
+        for f in followers:
+            if f.get("partner_id"):
+                partner_id = f["partner_id"][0]
+                f["partner_details"] = partners.get(partner_id, {})
+
+        return {"success": True, "followers": followers, "count": len(followers)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Add followers to a record")
+def add_followers(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    partner_ids: List[int],
+    send_notification: bool = True,
+) -> Dict[str, Any]:
+    """
+    Add followers to a record.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order')
+        res_id: The record ID
+        partner_ids: List of partner IDs to add as followers
+        send_notification: Whether to send a notification to new followers
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - added_partners: List of added partner IDs
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        if send_notification:
+            odoo.execute_method(
+                model,
+                "message_subscribe",
+                [res_id],
+                partner_ids=partner_ids,
+            )
+        else:
+            # Add followers without notification
+            for partner_id in partner_ids:
+                odoo.execute_method(
+                    "mail.followers",
+                    "create",
+                    {
+                        "res_model": model,
+                        "res_id": res_id,
+                        "partner_id": partner_id,
+                    },
+                )
+        return {"success": True, "added_partners": partner_ids}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Remove followers from a record")
+def remove_followers(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    partner_ids: List[int],
+) -> Dict[str, Any]:
+    """
+    Remove followers from a record.
+
+    Parameters:
+        model: The model name (e.g., 'sale.order')
+        res_id: The record ID
+        partner_ids: List of partner IDs to remove from followers
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - removed_partners: List of removed partner IDs
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        odoo.execute_method(
+            model,
+            "message_unsubscribe",
+            [res_id],
+            partner_ids=partner_ids,
+        )
+        return {"success": True, "removed_partners": partner_ids}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ----- MCP Tools: Activities -----
+
+
+@mcp.tool(description="Create a scheduled activity on a record")
+def create_activity(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    activity_type: str,
+    summary: str,
+    date_deadline: str,
+    user_id: int = None,
+    note: str = None,
+) -> Dict[str, Any]:
+    """
+    Create a scheduled activity on a record (todo, meeting, call, email, etc.).
+
+    Parameters:
+        model: The model name (e.g., 'res.partner', 'sale.order')
+        res_id: The record ID
+        activity_type: Type of activity. Common types:
+            - 'mail.mail_activity_data_todo': To-Do
+            - 'mail.mail_activity_data_call': Call
+            - 'mail.mail_activity_data_meeting': Meeting
+            - 'mail.mail_activity_data_email': Email
+            - 'mail.mail_activity_data_upload_document': Upload Document
+        summary: Short summary/title of the activity
+        date_deadline: Due date in YYYY-MM-DD format
+        user_id: User ID to assign the activity to (None for current user)
+        note: Detailed description/notes (HTML supported)
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - activity_id: ID of the created activity
+        - error: Error message (if failure)
+
+    Example:
+        create_activity(
+            "res.partner", 1,
+            "mail.mail_activity_data_call",
+            "Follow up on proposal",
+            "2024-01-20",
+            note="<p>Discuss pricing options</p>"
+        )
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        # Validate date format
+        try:
+            datetime.strptime(date_deadline, "%Y-%m-%d")
+        except ValueError:
+            return {"success": False, "error": "Invalid date_deadline format. Use YYYY-MM-DD"}
+
+        # Get activity type ID from xmlid
+        activity_type_id = None
+        try:
+            result = odoo.execute_method(
+                "ir.model.data",
+                "xmlid_to_res_id",
+                activity_type,
+            )
+            activity_type_id = result
+        except Exception:
+            # Try to find by name if xmlid fails
+            types = odoo.search_read(
+                "mail.activity.type",
+                [["name", "ilike", activity_type.split("_")[-1]]],
+                fields=["id"],
+                limit=1,
+            )
+            if types:
+                activity_type_id = types[0]["id"]
+
+        if not activity_type_id:
+            return {"success": False, "error": f"Activity type '{activity_type}' not found"}
+
+        values = {
+            "res_model": model,
+            "res_id": res_id,
+            "activity_type_id": activity_type_id,
+            "summary": summary,
+            "date_deadline": date_deadline,
+        }
+
+        if user_id:
+            values["user_id"] = user_id
+
+        if note:
+            values["note"] = note
+
+        activity_id = odoo.execute_method("mail.activity", "create", values)
+        return {"success": True, "activity_id": activity_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Get scheduled activities for a record or user")
+def get_activities(
+    ctx: Context,
+    model: str = None,
+    res_id: int = None,
+    user_id: int = None,
+    state: str = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Get scheduled activities with various filters.
+
+    Parameters:
+        model: Filter by model name (optional)
+        res_id: Filter by record ID (requires model)
+        user_id: Filter by assigned user ID (None for all users)
+        state: Filter by state ('overdue', 'today', 'planned', None for all)
+        limit: Maximum number of activities to return
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - activities: List of activities with details
+        - count: Total number of activities
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        domain = []
+
+        if model:
+            domain.append(["res_model", "=", model])
+        if res_id and model:
+            domain.append(["res_id", "=", res_id])
+        if user_id:
+            domain.append(["user_id", "=", user_id])
+
+        # Filter by state (deadline comparison)
+        today = datetime.now().strftime("%Y-%m-%d")
+        if state == "overdue":
+            domain.append(["date_deadline", "<", today])
+        elif state == "today":
+            domain.append(["date_deadline", "=", today])
+        elif state == "planned":
+            domain.append(["date_deadline", ">", today])
+
+        count = odoo.execute_method("mail.activity", "search_count", domain)
+
+        activities = odoo.search_read(
+            "mail.activity",
+            domain,
+            fields=[
+                "id",
+                "res_model",
+                "res_id",
+                "res_name",
+                "activity_type_id",
+                "summary",
+                "note",
+                "date_deadline",
+                "user_id",
+                "create_uid",
+                "create_date",
+                "state",
+            ],
+            limit=limit,
+            order="date_deadline asc",
+        )
+        return {"success": True, "activities": activities, "count": count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Get my pending activities")
+def get_my_activities(
+    ctx: Context,
+    include_overdue: bool = True,
+    include_today: bool = True,
+    include_planned: bool = True,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Get activities assigned to the current user.
+
+    Parameters:
+        include_overdue: Include overdue activities
+        include_today: Include activities due today
+        include_planned: Include future activities
+        limit: Maximum number of activities to return
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - activities: List of activities grouped by state
+        - summary: Count by state
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        today = datetime.now().strftime("%Y-%m-%d")
+        result = {"overdue": [], "today": [], "planned": []}
+        summary = {"overdue": 0, "today": 0, "planned": 0}
+
+        base_domain = [["user_id", "=", odoo.uid]]
+        fields = [
+            "id",
+            "res_model",
+            "res_id",
+            "res_name",
+            "activity_type_id",
+            "summary",
+            "date_deadline",
+            "state",
+        ]
+
+        if include_overdue:
+            domain = base_domain + [["date_deadline", "<", today]]
+            result["overdue"] = odoo.search_read(
+                "mail.activity", domain, fields=fields, limit=limit, order="date_deadline asc"
+            )
+            summary["overdue"] = odoo.execute_method("mail.activity", "search_count", domain)
+
+        if include_today:
+            domain = base_domain + [["date_deadline", "=", today]]
+            result["today"] = odoo.search_read(
+                "mail.activity", domain, fields=fields, limit=limit, order="date_deadline asc"
+            )
+            summary["today"] = odoo.execute_method("mail.activity", "search_count", domain)
+
+        if include_planned:
+            domain = base_domain + [["date_deadline", ">", today]]
+            result["planned"] = odoo.search_read(
+                "mail.activity", domain, fields=fields, limit=limit, order="date_deadline asc"
+            )
+            summary["planned"] = odoo.execute_method("mail.activity", "search_count", domain)
+
+        return {"success": True, "activities": result, "summary": summary}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Mark an activity as done")
+def complete_activity(
+    ctx: Context,
+    activity_id: int,
+    feedback: str = None,
+) -> Dict[str, Any]:
+    """
+    Mark an activity as done/completed.
+
+    Parameters:
+        activity_id: ID of the activity to complete
+        feedback: Optional feedback message to log
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        if feedback:
+            odoo.execute_method(
+                "mail.activity",
+                "action_feedback",
+                [activity_id],
+                feedback=feedback,
+            )
+        else:
+            odoo.execute_method(
+                "mail.activity",
+                "action_done",
+                [activity_id],
+            )
+        return {"success": True, "completed_activity_id": activity_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Cancel/delete an activity")
+def cancel_activity(
+    ctx: Context,
+    activity_id: int,
+) -> Dict[str, Any]:
+    """
+    Cancel/delete a scheduled activity.
+
+    Parameters:
+        activity_id: ID of the activity to cancel
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        odoo.execute_method("mail.activity", "unlink", [activity_id])
+        return {"success": True, "cancelled_activity_id": activity_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Reschedule an activity to a new date")
+def reschedule_activity(
+    ctx: Context,
+    activity_id: int,
+    new_date: str,
+    new_user_id: int = None,
+) -> Dict[str, Any]:
+    """
+    Reschedule an activity to a new deadline date.
+
+    Parameters:
+        activity_id: ID of the activity to reschedule
+        new_date: New deadline date in YYYY-MM-DD format
+        new_user_id: Optionally reassign to a different user
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        # Validate date format
+        try:
+            datetime.strptime(new_date, "%Y-%m-%d")
+        except ValueError:
+            return {"success": False, "error": "Invalid new_date format. Use YYYY-MM-DD"}
+
+        values = {"date_deadline": new_date}
+        if new_user_id:
+            values["user_id"] = new_user_id
+
+        odoo.execute_method("mail.activity", "write", [activity_id], values)
+        return {"success": True, "rescheduled_activity_id": activity_id, "new_date": new_date}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Get available activity types")
+def get_activity_types(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    Get all available activity types in the system.
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - activity_types: List of activity types with details
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        activity_types = odoo.search_read(
+            "mail.activity.type",
+            [],
+            fields=["id", "name", "summary", "icon", "decoration_type", "res_model", "delay_count", "delay_unit"],
+            order="sequence asc",
+        )
+        return {"success": True, "activity_types": activity_types}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ----- MCP Tools: Assignment & Delegation -----
+
+
+@mcp.tool(description="Delegate an activity to another user")
+def delegate_activity(
+    ctx: Context,
+    activity_id: int,
+    user_id: int,
+    note: str = None,
+) -> Dict[str, Any]:
+    """
+    Delegate an activity to another user.
+
+    Parameters:
+        activity_id: ID of the activity to delegate
+        user_id: ID of the user to delegate to
+        note: Optional note explaining the delegation
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - delegated_to: User ID the activity was delegated to
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        # Update the activity's assigned user
+        values = {"user_id": user_id}
+
+        # If note provided, append to existing note
+        if note:
+            activity = odoo.read_records("mail.activity", [activity_id], fields=["note", "res_model", "res_id"])
+            if activity:
+                existing_note = activity[0].get("note") or ""
+                delegation_note = f"<p><strong>Delegated:</strong> {note}</p>"
+                values["note"] = existing_note + delegation_note
+
+                # Also post a message about the delegation
+                model = activity[0].get("res_model")
+                res_id = activity[0].get("res_id")
+                if model and res_id:
+                    # Get user name
+                    user = odoo.read_records("res.users", [user_id], fields=["name"])
+                    user_name = user[0]["name"] if user else f"User {user_id}"
+                    odoo.execute_method(
+                        model,
+                        "message_post",
+                        [res_id],
+                        body=f"<p>Activity delegated to <strong>{user_name}</strong>: {note}</p>",
+                        message_type="comment",
+                        subtype_xmlid="mail.mt_note",
+                    )
+
+        odoo.execute_method("mail.activity", "write", [activity_id], values)
+        return {"success": True, "delegated_to": user_id, "activity_id": activity_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Assign a record to a user (set responsible)")
+def assign_record(
+    ctx: Context,
+    model: str,
+    res_id: int,
+    user_id: int,
+    user_field: str = "user_id",
+    notify: bool = True,
+) -> Dict[str, Any]:
+    """
+    Assign a record to a user by setting the responsible/assigned user field.
+
+    Parameters:
+        model: The model name (e.g., 'crm.lead', 'project.task', 'helpdesk.ticket')
+        res_id: The record ID
+        user_id: ID of the user to assign
+        user_field: Name of the user field (default 'user_id', could be 'assigned_user_id', etc.)
+        notify: Whether to notify the user about the assignment
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - assigned_to: User ID the record was assigned to
+        - error: Error message (if failure)
+
+    Common user fields by model:
+        - crm.lead: user_id
+        - project.task: user_ids (many2many)
+        - helpdesk.ticket: user_id
+        - sale.order: user_id
+        - hr.applicant: user_id
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        # Check if it's a many2many field
+        fields_info = odoo.execute_method(model, "fields_get", [user_field])
+        field_type = fields_info.get(user_field, {}).get("type")
+
+        if field_type == "many2many":
+            # For many2many, use special command to add user
+            values = {user_field: [(4, user_id)]}  # (4, id) = link
+        else:
+            values = {user_field: user_id}
+
+        odoo.execute_method(model, "write", [res_id], values)
+
+        # Optionally notify the user
+        if notify:
+            user = odoo.read_records("res.users", [user_id], fields=["name", "partner_id"])
+            if user and user[0].get("partner_id"):
+                user_name = user[0]["name"]
+                partner_id = user[0]["partner_id"][0]
+                odoo.execute_method(
+                    model,
+                    "message_post",
+                    [res_id],
+                    body=f"<p>This record has been assigned to <strong>{user_name}</strong></p>",
+                    message_type="comment",
+                    subtype_xmlid="mail.mt_note",
+                    partner_ids=[partner_id],
+                )
+
+        return {"success": True, "assigned_to": user_id, "model": model, "res_id": res_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Star/unstar a message for quick access")
+def toggle_message_star(
+    ctx: Context,
+    message_id: int,
+    starred: bool = None,
+) -> Dict[str, Any]:
+    """
+    Star or unstar a message for the current user.
+    Starred messages appear in a special "Starred" view for quick access.
+
+    Parameters:
+        message_id: ID of the message to star/unstar
+        starred: True to star, False to unstar, None to toggle
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - starred: New starred state
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        if starred is None:
+            # Toggle: first check current state
+            message = odoo.read_records("mail.message", [message_id], fields=["starred"])
+            if message:
+                starred = not message[0].get("starred", False)
+            else:
+                return {"success": False, "error": "Message not found"}
+
+        if starred:
+            odoo.execute_method("mail.message", "set_starred", [message_id])
+        else:
+            odoo.execute_method("mail.message", "set_unstarred", [message_id])
+
+        return {"success": True, "message_id": message_id, "starred": starred}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Get starred messages for the current user")
+def get_starred_messages(
+    ctx: Context,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Get all starred messages for the current user.
+
+    Parameters:
+        limit: Maximum number of messages to return
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - messages: List of starred messages
+        - count: Total number of starred messages
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        # Get starred messages for current user
+        domain = [["starred", "=", True]]
+
+        count = odoo.execute_method("mail.message", "search_count", domain)
+        messages = odoo.search_read(
+            "mail.message",
+            domain,
+            fields=[
+                "id",
+                "date",
+                "model",
+                "res_id",
+                "author_id",
+                "body",
+                "subject",
+                "message_type",
+            ],
+            limit=limit,
+            order="date desc",
+        )
+
+        return {"success": True, "messages": messages, "count": count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Get users available for assignment")
+def get_assignable_users(
+    ctx: Context,
+    model: str = None,
+    search: str = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Get users that can be assigned to records/activities.
+
+    Parameters:
+        model: Optionally filter users who have access to this model
+        search: Search term to filter users by name/email
+        limit: Maximum number of users to return
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - users: List of users with basic info
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        domain = [["active", "=", True], ["share", "=", False]]  # Only internal users
+
+        if search:
+            domain.append("|")
+            domain.append(["name", "ilike", search])
+            domain.append(["login", "ilike", search])
+
+        users = odoo.search_read(
+            "res.users",
+            domain,
+            fields=["id", "name", "login", "email", "partner_id", "company_id"],
+            limit=limit,
+            order="name asc",
+        )
+
+        return {"success": True, "users": users, "count": len(users)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(description="Bulk assign activities to a user")
+def bulk_delegate_activities(
+    ctx: Context,
+    activity_ids: List[int],
+    user_id: int,
+    note: str = None,
+) -> Dict[str, Any]:
+    """
+    Delegate multiple activities to a user at once.
+
+    Parameters:
+        activity_ids: List of activity IDs to delegate
+        user_id: ID of the user to delegate all activities to
+        note: Optional note explaining the delegation
+
+    Returns:
+        Dictionary containing:
+        - success: Boolean indicating success
+        - delegated_count: Number of activities delegated
+        - delegated_to: User ID the activities were delegated to
+        - error: Error message (if failure)
+    """
+    odoo = ctx.request_context.lifespan_context.odoo
+    try:
+        values = {"user_id": user_id}
+        odoo.execute_method("mail.activity", "write", activity_ids, values)
+
+        # Get user name for the message
+        user = odoo.read_records("res.users", [user_id], fields=["name"])
+        user_name = user[0]["name"] if user else f"User {user_id}"
+
+        if note:
+            # Post notes on all affected records
+            activities = odoo.read_records(
+                "mail.activity", activity_ids, fields=["res_model", "res_id"]
+            )
+            for activity in activities:
+                model = activity.get("res_model")
+                res_id = activity.get("res_id")
+                if model and res_id:
+                    odoo.execute_method(
+                        model,
+                        "message_post",
+                        [res_id],
+                        body=f"<p>Activity delegated to <strong>{user_name}</strong>: {note}</p>",
+                        message_type="comment",
+                        subtype_xmlid="mail.mt_note",
+                    )
+
+        return {
+            "success": True,
+            "delegated_count": len(activity_ids),
+            "delegated_to": user_id,
+            "delegated_to_name": user_name,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ----- MCP Tools: Legacy (kept for backwards compatibility) -----
+
+
+@mcp.tool(description="Post a message on a record's chatter (legacy - use post_comment or post_internal_note)")
 def post_message(
     ctx: Context,
     model: str,
@@ -1136,6 +2167,7 @@ def post_message(
 ) -> Dict[str, Any]:
     """
     Post a message on a record's chatter (activity feed).
+    Note: Consider using post_comment() for public messages or post_internal_note() for internal notes.
 
     Parameters:
         model: The model name (e.g., 'sale.order')
@@ -1161,41 +2193,6 @@ def post_message(
             subtype_xmlid=subtype_xmlid,
         )
         return {"success": True, "message_id": message_id}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@mcp.tool(description="Get messages/chatter history for a record")
-def get_messages(
-    ctx: Context,
-    model: str,
-    res_id: int,
-    limit: int = 20,
-) -> Dict[str, Any]:
-    """
-    Get the message history (chatter) for a record.
-
-    Parameters:
-        model: The model name (e.g., 'sale.order')
-        res_id: The record ID
-        limit: Maximum number of messages to return
-
-    Returns:
-        Dictionary containing:
-        - success: Boolean indicating success
-        - messages: List of messages
-        - error: Error message (if failure)
-    """
-    odoo = ctx.request_context.lifespan_context.odoo
-    try:
-        messages = odoo.search_read(
-            "mail.message",
-            [["model", "=", model], ["res_id", "=", res_id]],
-            fields=["id", "date", "author_id", "body", "message_type", "subtype_id"],
-            limit=limit,
-            order="date desc",
-        )
-        return {"success": True, "messages": messages}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
